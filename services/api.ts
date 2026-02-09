@@ -1,11 +1,18 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { initializeApp, FirebaseApp } from 'firebase/app';
+import { getAuth, Auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getFirestore, Firestore, collection, doc, getDoc, setDoc, addDoc, query, where, getDocs, orderBy, deleteDoc, updateDoc } from 'firebase/firestore';
 import { User, Note, PDFResource, ChatMessage, UserRole } from '../types';
 import { MOCK_USERS, INITIAL_NOTES, INITIAL_RESOURCES, INITIAL_CHATS } from '../constants';
 
 // --- Configuration ---
-// To go fully online, provide these values in your environment or replace strings here.
-const SUPABASE_URL = import.meta.env?.VITE_SUPABASE_URL || '';
-const SUPABASE_KEY = import.meta.env?.VITE_SUPABASE_ANON_KEY || '';
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
 
 // --- Local Storage Adapter (Offline/Mock Mode) ---
 class LocalDB {
@@ -22,7 +29,6 @@ class LocalDB {
     localStorage.setItem(`btec_${key}`, JSON.stringify(data));
   }
 
-  // Initialize DB with seed data if empty
   constructor() {
     if (!localStorage.getItem('btec_users')) this.set('users', MOCK_USERS);
     if (!localStorage.getItem('btec_notes')) this.set('notes', INITIAL_NOTES);
@@ -60,14 +66,10 @@ class LocalDB {
     const auth = this.get<Record<string, string>>('auth', {});
     const users = this.get<User[]>('users', []);
 
-    // Check if roll exists in "University Records" (the seed users)
-    // In a real app, this might check a master list. Here we check if the user is in our seed data.
-    // If user is NOT in seed data (MOCK_USERS), we create a new blank student entry for them.
     let userIndex = users.findIndex(u => u.rollNumber === roll);
     let user = users[userIndex];
 
     if (!user) {
-       // Allow new registration even if not in mock (Dynamic creation)
        user = {
          id: Date.now().toString(),
          rollNumber: roll,
@@ -87,10 +89,8 @@ class LocalDB {
     if (auth[roll]) throw new Error('User already registered.');
 
     auth[roll] = pass;
-    // Update batch if provided during registration
     if (batch) user.batch = batch;
-
-    if (userIndex !== -1) users[userIndex] = user; // update existing
+    if (userIndex !== -1) users[userIndex] = user;
     
     this.set('auth', auth);
     this.set('users', users);
@@ -114,7 +114,6 @@ class LocalDB {
     return users;
   }
 
-  // --- Notes ---
   async getNotes(roll: string): Promise<Note[]> {
     const notes = this.get<Note[]>('notes', []);
     return notes.filter(n => n.userRoll === roll).sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -138,7 +137,6 @@ class LocalDB {
     this.set('notes', notes);
   }
 
-  // --- Resources ---
   async getResources(): Promise<PDFResource[]> {
     return this.get<PDFResource[]>('resources', []);
   }
@@ -150,7 +148,6 @@ class LocalDB {
     return res;
   }
 
-  // --- Chat ---
   async getMessages(batchId: string): Promise<ChatMessage[]> {
     const msgs = this.get<ChatMessage[]>('chats', []);
     return msgs.filter(m => m.batchId === batchId).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -166,58 +163,181 @@ class LocalDB {
 
 // --- Main API Service ---
 class ApiService {
-  private supabase: SupabaseClient | null = null;
+  private app: FirebaseApp | null = null;
+  private auth: Auth | null = null;
+  private db: Firestore | null = null;
   private localDB: LocalDB;
 
   constructor() {
     this.localDB = new LocalDB();
-    if (SUPABASE_URL && SUPABASE_KEY) {
-      this.supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-      console.log('Online Mode: Supabase Connected');
+    
+    // Check if config exists and looks valid (api key presence)
+    if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+      try {
+        this.app = initializeApp(firebaseConfig);
+        this.auth = getAuth(this.app);
+        this.db = getFirestore(this.app);
+        console.log('Online Mode: Firebase Connected');
+      } catch (e) {
+        console.warn('Firebase init failed, falling back to local DB', e);
+      }
     } else {
-      console.log('Offline Mode: Using Local Persistence');
+      console.log('Offline Mode: Using Local Persistence (No Firebase Config)');
     }
+  }
+
+  // Helper to map Roll Number to pseudo-email for Firebase Auth
+  private getEmail(roll: string) {
+    return `${roll}@btec.app`;
   }
 
   // --- Auth & Users ---
   async login(roll: string, pass: string): Promise<User> {
-    if (this.supabase) {
-      // Supabase logic would go here (signInWithPassword using email mapped from roll, or custom auth)
-      // For this prototype, we'll assume a custom table 'users' and simple password check if we had it
-      // But simplifying to fallback for now as Supabase setup requires external SQL setup.
-      // We will default to localDB to ensure functionality unless explicitly fully implemented.
-      return this.localDB.login(roll, pass);
+    if (this.auth && this.db) {
+      try {
+        // 1. Authenticate with Firebase Auth
+        await signInWithEmailAndPassword(this.auth, this.getEmail(roll), pass);
+        
+        // 2. Fetch User Profile from Firestore 'users' collection
+        // Assumes document ID is the roll number for simplicity
+        const docRef = doc(this.db, 'users', roll);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists()) {
+          return docSnap.data() as User;
+        } else {
+          // Fallback if auth exists but profile doc is missing (rare/legacy)
+          // We create a basic profile based on local constants if found, else generic
+          const seedUser = MOCK_USERS.find(u => u.rollNumber === roll);
+          const newUser: User = seedUser || {
+            id: roll,
+            rollNumber: roll,
+            fullName: 'Student',
+            department: 'Unknown',
+            batch: 'Unknown',
+            level: 1,
+            term: 1,
+            role: UserRole.STUDENT,
+            attendancePercent: 0,
+            cgpa: 0,
+            profileImageUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${roll}`
+          };
+          // Save this to firestore so it exists next time
+          await setDoc(docRef, newUser);
+          return newUser;
+        }
+      } catch (error: any) {
+        console.error("Firebase Login Error", error);
+        throw new Error(error.message || 'Login failed');
+      }
     }
     return this.localDB.login(roll, pass);
   }
 
   async register(roll: string, pass: string, batch: string): Promise<User> {
+    if (this.auth && this.db) {
+      try {
+        // 1. Create Auth User
+        await createUserWithEmailAndPassword(this.auth, this.getEmail(roll), pass);
+        
+        // 2. Prepare User Profile
+        // Check if we have seed data for this roll
+        const seedUser = MOCK_USERS.find(u => u.rollNumber === roll);
+        
+        const newUser: User = {
+          ...(seedUser || {
+             id: roll,
+             rollNumber: roll,
+             fullName: `Student ${roll.slice(-3)}`,
+             department: 'General',
+             level: 1,
+             term: 1,
+             role: UserRole.STUDENT,
+             attendancePercent: 100,
+             cgpa: 0.00,
+             profileImageUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${roll}`
+          }),
+          batch: batch // Override/Set batch from registration form
+        };
+
+        // 3. Save to Firestore
+        await setDoc(doc(this.db, 'users', roll), newUser);
+        return newUser;
+      } catch (error: any) {
+        console.error("Firebase Register Error", error);
+        throw new Error(error.message || 'Registration failed');
+      }
+    }
     return this.localDB.register(roll, pass, batch);
   }
 
   async updateProfile(roll: string, updates: Partial<User>): Promise<User> {
+    if (this.db) {
+      const docRef = doc(this.db, 'users', roll);
+      await updateDoc(docRef, updates);
+      // Fetch latest
+      const snap = await getDoc(docRef);
+      return snap.data() as User;
+    }
     return this.localDB.updateUser(roll, updates);
   }
 
   async getBatchUsers(batch: string): Promise<User[]> {
+    if (this.db) {
+      const q = query(collection(this.db, 'users'), where('batch', '==', batch));
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(d => d.data() as User);
+    }
     return this.localDB.getUsers(batch);
   }
 
   // --- Notes ---
   async getNotes(userRoll: string): Promise<Note[]> {
+    if (this.db) {
+      const q = query(
+        collection(this.db, 'notes'), 
+        where('userRoll', '==', userRoll)
+      );
+      const snapshot = await getDocs(q);
+      const notes = snapshot.docs.map(d => d.data() as Note);
+      // Client-side sort if index missing
+      return notes.sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    }
     return this.localDB.getNotes(userRoll);
   }
 
   async saveNote(note: Note): Promise<Note> {
+    if (this.db) {
+      const docRef = doc(this.db, 'notes', note.id);
+      await setDoc(docRef, note);
+      return note;
+    }
     return this.localDB.saveNote(note);
   }
 
   async deleteNote(id: string): Promise<void> {
+    if (this.db) {
+      await deleteDoc(doc(this.db, 'notes', id));
+      return;
+    }
     return this.localDB.deleteNote(id);
   }
 
   // --- Resources ---
   async getResources(level?: number, term?: number, dept?: string): Promise<PDFResource[]> {
+    if (this.db) {
+      // Basic query, client-side filtering for simplicity due to multiple permutations
+      const q = query(collection(this.db, 'resources'));
+      const snapshot = await getDocs(q);
+      let resources = snapshot.docs.map(d => d.data() as PDFResource);
+      
+      if (level) resources = resources.filter(r => r.level === level);
+      if (term) resources = resources.filter(r => r.term === term);
+      if (dept) resources = resources.filter(r => r.department === dept);
+      
+      return resources;
+    }
+
     const all = await this.localDB.getResources();
     return all.filter(r => 
       (!level || r.level === level) &&
@@ -227,16 +347,32 @@ class ApiService {
   }
 
   async addResource(res: PDFResource): Promise<PDFResource> {
+    if (this.db) {
+      await setDoc(doc(this.db, 'resources', res.id), res);
+      return res;
+    }
     return this.localDB.addResource(res);
   }
 
   // --- Chat ---
   async getMessages(batchId: string): Promise<ChatMessage[]> {
+    if (this.db) {
+      const q = query(
+        collection(this.db, 'chats'), 
+        where('batchId', '==', batchId)
+      );
+      const snapshot = await getDocs(q);
+      const msgs = snapshot.docs.map(d => d.data() as ChatMessage);
+      return msgs.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    }
     return this.localDB.getMessages(batchId);
   }
 
   async sendMessage(msg: ChatMessage): Promise<ChatMessage> {
-    // In a real online app, we would broadcast this via Supabase Realtime here
+    if (this.db) {
+      await setDoc(doc(this.db, 'chats', msg.id), msg);
+      return msg;
+    }
     return this.localDB.sendMessage(msg);
   }
 }
