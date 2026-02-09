@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -12,6 +12,13 @@ import { NavTab } from './types';
 const AppContent: React.FC = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<NavTab>(NavTab.HOME);
+
+  // Auto-redirect to Profile for verification if user has a temporary "G-" roll number
+  useEffect(() => {
+    if (user && user.rollNumber.startsWith('G-')) {
+      setActiveTab(NavTab.PROFILE);
+    }
+  }, [user]);
 
   if (!user) {
     return <Login />;
