@@ -1,28 +1,5 @@
-import { initializeApp, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { getFirestore, Firestore, collection, doc, getDoc, setDoc, addDoc, query, where, getDocs, orderBy, deleteDoc, updateDoc } from 'firebase/firestore';
 import { User, Note, PDFResource, ChatMessage, UserRole } from '../types';
 import { MOCK_USERS, INITIAL_NOTES, INITIAL_RESOURCES, INITIAL_CHATS } from '../constants';
-
-// --- Configuration ---
-// Safe access to import.meta.env to prevent runtime crashes
-const getEnv = (key: string) => {
-  try {
-    // @ts-ignore
-    return import.meta.env && import.meta.env[key] ? import.meta.env[key] : '';
-  } catch {
-    return '';
-  }
-};
-
-const firebaseConfig = {
-  apiKey: getEnv('VITE_FIREBASE_API_KEY'),
-  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN'),
-  projectId: getEnv('VITE_FIREBASE_PROJECT_ID'),
-  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET'),
-  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-  appId: getEnv('VITE_FIREBASE_APP_ID')
-};
 
 // --- Local Storage Adapter (Offline/Mock Mode) ---
 class LocalDB {
@@ -69,6 +46,39 @@ class LocalDB {
     const user = users.find(u => u.rollNumber === roll);
     if (!user) throw new Error('User record missing.');
     return user;
+  }
+
+  async loginWithGoogle(): Promise<User> {
+    // Mock Google Login for Offline Mode
+    await new Promise(r => setTimeout(r, 800));
+    
+    // Try to find existing google user in local users list
+    const users = this.get<User[]>('users', []);
+    const existingUser = users.find(u => u.id === 'google_mock_123');
+    
+    if (existingUser) {
+        return existingUser;
+    }
+
+    const mockGoogleUser: User = {
+      id: 'google_mock_123',
+      rollNumber: 'G-123456',
+      fullName: 'Google User (Mock)',
+      department: 'General',
+      batch: '13th Batch',
+      level: 1,
+      term: 1,
+      role: UserRole.STUDENT,
+      attendancePercent: 100,
+      cgpa: 0.00,
+      profileImageUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=google'
+    };
+    
+    // Save new google user to local DB so they persist
+    users.push(mockGoogleUser);
+    this.set('users', users);
+
+    return mockGoogleUser;
   }
 
   async register(roll: string, pass: string, batch: string): Promise<User> {
@@ -120,8 +130,22 @@ class LocalDB {
 
   async getUsers(batchId?: string): Promise<User[]> {
     const users = this.get<User[]>('users', []);
-    if (batchId) return users.filter(u => u.batch === batchId);
-    return users;
+    const auth = this.get<Record<string, string>>('auth', {});
+
+    // Filter to show only "Registered/Active" users in the chat list
+    // 1. Must be in Auth map (registered with password)
+    // 2. OR be the hardcoded admin
+    // 3. OR be a Google user (checked by ID format or 'G-' roll)
+    const activeUsers = users.filter(u => {
+      const isRegistered = !!auth[u.rollNumber];
+      const isAdmin = u.rollNumber === '23040401014'; // Hardcoded admin
+      const isGoogle = u.rollNumber.startsWith('G-') || u.id.startsWith('google');
+      
+      return isRegistered || isAdmin || isGoogle;
+    });
+
+    if (batchId) return activeUsers.filter(u => u.batch === batchId);
+    return activeUsers;
   }
 
   async getNotes(roll: string): Promise<Note[]> {
@@ -173,181 +197,49 @@ class LocalDB {
 
 // --- Main API Service ---
 class ApiService {
-  private app: FirebaseApp | null = null;
-  private auth: Auth | null = null;
-  private db: Firestore | null = null;
   private localDB: LocalDB;
 
   constructor() {
     this.localDB = new LocalDB();
-    
-    // Check if config exists and looks valid (api key presence)
-    if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-      try {
-        this.app = initializeApp(firebaseConfig);
-        this.auth = getAuth(this.app);
-        this.db = getFirestore(this.app);
-        console.log('Online Mode: Firebase Connected');
-      } catch (e) {
-        console.warn('Firebase init failed, falling back to local DB', e);
-      }
-    } else {
-      console.log('Offline Mode: Using Local Persistence (No Firebase Config)');
-    }
-  }
-
-  // Helper to map Roll Number to pseudo-email for Firebase Auth
-  private getEmail(roll: string) {
-    return `${roll}@btec.app`;
+    console.log('Online Mode: Using Local DB due to missing Firebase configuration/imports');
   }
 
   // --- Auth & Users ---
   async login(roll: string, pass: string): Promise<User> {
-    if (this.auth && this.db) {
-      try {
-        // 1. Authenticate with Firebase Auth
-        await signInWithEmailAndPassword(this.auth, this.getEmail(roll), pass);
-        
-        // 2. Fetch User Profile from Firestore 'users' collection
-        // Assumes document ID is the roll number for simplicity
-        const docRef = doc(this.db, 'users', roll);
-        const docSnap = await getDoc(docRef);
-
-        if (docSnap.exists()) {
-          return docSnap.data() as User;
-        } else {
-          // Fallback if auth exists but profile doc is missing (rare/legacy)
-          // We create a basic profile based on local constants if found, else generic
-          const seedUser = MOCK_USERS.find(u => u.rollNumber === roll);
-          const newUser: User = seedUser || {
-            id: roll,
-            rollNumber: roll,
-            fullName: 'Student',
-            department: 'Unknown',
-            batch: 'Unknown',
-            level: 1,
-            term: 1,
-            role: UserRole.STUDENT,
-            attendancePercent: 0,
-            cgpa: 0,
-            profileImageUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${roll}`
-          };
-          // Save this to firestore so it exists next time
-          await setDoc(docRef, newUser);
-          return newUser;
-        }
-      } catch (error: any) {
-        console.error("Firebase Login Error", error);
-        throw new Error(error.message || 'Login failed');
-      }
-    }
     return this.localDB.login(roll, pass);
   }
 
-  async register(roll: string, pass: string, batch: string): Promise<User> {
-    if (this.auth && this.db) {
-      try {
-        // 1. Create Auth User
-        await createUserWithEmailAndPassword(this.auth, this.getEmail(roll), pass);
-        
-        // 2. Prepare User Profile
-        // Check if we have seed data for this roll
-        const seedUser = MOCK_USERS.find(u => u.rollNumber === roll);
-        
-        const newUser: User = {
-          ...(seedUser || {
-             id: roll,
-             rollNumber: roll,
-             fullName: `Student ${roll.slice(-3)}`,
-             department: 'General',
-             level: 1,
-             term: 1,
-             role: UserRole.STUDENT,
-             attendancePercent: 100,
-             cgpa: 0.00,
-             profileImageUrl: `https://api.dicebear.com/7.x/avataaars/svg?seed=${roll}`
-          }),
-          batch: batch // Override/Set batch from registration form
-        };
+  async loginWithGoogle(): Promise<User> {
+    return this.localDB.loginWithGoogle();
+  }
 
-        // 3. Save to Firestore
-        await setDoc(doc(this.db, 'users', roll), newUser);
-        return newUser;
-      } catch (error: any) {
-        console.error("Firebase Register Error", error);
-        throw new Error(error.message || 'Registration failed');
-      }
-    }
+  async register(roll: string, pass: string, batch: string): Promise<User> {
     return this.localDB.register(roll, pass, batch);
   }
 
   async updateProfile(roll: string, updates: Partial<User>): Promise<User> {
-    if (this.db) {
-      const docRef = doc(this.db, 'users', roll);
-      await updateDoc(docRef, updates);
-      // Fetch latest
-      const snap = await getDoc(docRef);
-      return snap.data() as User;
-    }
     return this.localDB.updateUser(roll, updates);
   }
 
   async getBatchUsers(batch: string): Promise<User[]> {
-    if (this.db) {
-      const q = query(collection(this.db, 'users'), where('batch', '==', batch));
-      const snapshot = await getDocs(q);
-      return snapshot.docs.map(d => d.data() as User);
-    }
     return this.localDB.getUsers(batch);
   }
 
   // --- Notes ---
   async getNotes(userRoll: string): Promise<Note[]> {
-    if (this.db) {
-      const q = query(
-        collection(this.db, 'notes'), 
-        where('userRoll', '==', userRoll)
-      );
-      const snapshot = await getDocs(q);
-      const notes = snapshot.docs.map(d => d.data() as Note);
-      // Client-side sort if index missing
-      return notes.sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    }
     return this.localDB.getNotes(userRoll);
   }
 
   async saveNote(note: Note): Promise<Note> {
-    if (this.db) {
-      const docRef = doc(this.db, 'notes', note.id);
-      await setDoc(docRef, note);
-      return note;
-    }
     return this.localDB.saveNote(note);
   }
 
   async deleteNote(id: string): Promise<void> {
-    if (this.db) {
-      await deleteDoc(doc(this.db, 'notes', id));
-      return;
-    }
     return this.localDB.deleteNote(id);
   }
 
   // --- Resources ---
   async getResources(level?: number, term?: number, dept?: string): Promise<PDFResource[]> {
-    if (this.db) {
-      // Basic query, client-side filtering for simplicity due to multiple permutations
-      const q = query(collection(this.db, 'resources'));
-      const snapshot = await getDocs(q);
-      let resources = snapshot.docs.map(d => d.data() as PDFResource);
-      
-      if (level) resources = resources.filter(r => r.level === level);
-      if (term) resources = resources.filter(r => r.term === term);
-      if (dept) resources = resources.filter(r => r.department === dept);
-      
-      return resources;
-    }
-
     const all = await this.localDB.getResources();
     return all.filter(r => 
       (!level || r.level === level) &&
@@ -357,32 +249,15 @@ class ApiService {
   }
 
   async addResource(res: PDFResource): Promise<PDFResource> {
-    if (this.db) {
-      await setDoc(doc(this.db, 'resources', res.id), res);
-      return res;
-    }
     return this.localDB.addResource(res);
   }
 
   // --- Chat ---
   async getMessages(batchId: string): Promise<ChatMessage[]> {
-    if (this.db) {
-      const q = query(
-        collection(this.db, 'chats'), 
-        where('batchId', '==', batchId)
-      );
-      const snapshot = await getDocs(q);
-      const msgs = snapshot.docs.map(d => d.data() as ChatMessage);
-      return msgs.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    }
     return this.localDB.getMessages(batchId);
   }
 
   async sendMessage(msg: ChatMessage): Promise<ChatMessage> {
-    if (this.db) {
-      await setDoc(doc(this.db, 'chats', msg.id), msg);
-      return msg;
-    }
     return this.localDB.sendMessage(msg);
   }
 }

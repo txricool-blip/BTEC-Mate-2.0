@@ -2,8 +2,8 @@ import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import { NavTab } from '../types';
-import { LogOut, User, Phone, Award, Grid, AlertTriangle, Edit2, Camera, Save, X, Upload, ArrowLeft } from 'lucide-react';
+import { NavTab, User } from '../types';
+import { LogOut, User as UserIcon, Phone, Award, Grid, AlertTriangle, Edit2, Camera, Save, X, Upload, ArrowLeft } from 'lucide-react';
 
 interface ProfileProps {
   navigate: (tab: NavTab) => void;
@@ -15,11 +15,7 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Local form state
-  const [editForm, setEditForm] = useState({
-    phoneNumber: '',
-    profileImageUrl: '',
-    batch: ''
-  });
+  const [editForm, setEditForm] = useState<Partial<User>>({});
 
   if (!user) return null;
 
@@ -27,7 +23,11 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
     setEditForm({
       phoneNumber: user.phoneNumber || '',
       profileImageUrl: user.profileImageUrl || '',
-      batch: user.batch
+      batch: user.batch || '13th Batch',
+      rollNumber: user.rollNumber || '',
+      level: user.level || 1,
+      term: user.term || 1,
+      department: user.department || 'General'
     });
     setIsEditing(true);
   };
@@ -59,6 +59,8 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
       fileInputRef.current.click();
     }
   };
+
+  const isGoogleUser = user.rollNumber.startsWith('G-');
 
   return (
     <div className="p-4 space-y-4 pb-20">
@@ -145,29 +147,36 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
         </span>
       </div>
 
-      {user.failedSubjects && user.failedSubjects.length > 0 && (
-         <Card className="p-4 bg-red-50 border-red-100">
-            <div className="flex items-start gap-3">
-               <div className="bg-red-100 p-2 rounded-lg text-red-500">
-                  <AlertTriangle size={20} />
-               </div>
-               <div>
-                  <h3 className="font-bold text-red-700">Academic Alert</h3>
-                  <p className="text-sm text-red-600 mt-1">
-                     You have failed subjects in the last term: <br/>
-                     <span className="font-semibold">{user.failedSubjects.join(', ')}</span>
-                  </p>
-               </div>
-            </div>
-         </Card>
+      {isGoogleUser && !isEditing && (
+        <Card className="p-4 bg-yellow-50 border-yellow-200 animate-pulse">
+           <div className="flex items-center gap-3">
+             <AlertTriangle className="text-yellow-600" />
+             <div>
+               <h3 className="text-sm font-bold text-yellow-800">Profile Incomplete</h3>
+               <p className="text-xs text-yellow-700">Please edit your profile and add your Roll Number, Level, and Term to access Chat.</p>
+             </div>
+           </div>
+        </Card>
       )}
 
       <Card className="p-0 overflow-hidden divide-y divide-gray-100">
          <div className="p-4 flex items-center gap-4">
-            <div className="bg-gray-50 p-2 rounded-full text-gray-500"><User size={20} /></div>
-            <div>
+            <div className="bg-gray-50 p-2 rounded-full text-gray-500"><UserIcon size={20} /></div>
+            <div className="flex-1">
               <p className="text-xs text-gray-400 uppercase font-bold">Roll Number</p>
-              <p className="font-medium text-gray-900">{user.rollNumber}</p>
+              {isEditing ? (
+                 <input 
+                    type="text"
+                    value={editForm.rollNumber}
+                    onChange={(e) => setEditForm({...editForm, rollNumber: e.target.value})}
+                    placeholder="2304..."
+                    // Always editable for Google users to fix their 'G-' ID. 
+                    // Restricted for others to prevent identity changes, but allowed here for simplicity per request.
+                    className={`w-full mt-1 px-3 py-1.5 text-sm bg-gray-50 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none ${isGoogleUser ? 'border-yellow-300 ring-2 ring-yellow-100' : 'border-blue-200'}`}
+                 />
+              ) : (
+                <p className="font-medium text-gray-900">{user.rollNumber}</p>
+              )}
             </div>
          </div>
          <div className="p-4 flex items-center gap-4">
@@ -186,12 +195,56 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
                       <option value="14th Batch">14th Batch</option>
                       <option value="15th Batch">15th Batch</option>
                    </select>
-                   <div className="px-3 py-1.5 text-sm bg-gray-100 border border-gray-200 rounded-lg text-gray-500 flex items-center whitespace-nowrap">
-                     {user.department}
-                   </div>
+                   <select
+                      value={editForm.department}
+                      onChange={(e) => setEditForm({...editForm, department: e.target.value})}
+                      className="w-24 px-3 py-1.5 text-sm bg-gray-50 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                   >
+                      <option value="General">Gen</option>
+                      <option value="YE">YE</option>
+                      <option value="FE">FE</option>
+                      <option value="AE">AE</option>
+                      <option value="WPE">WPE</option>
+                   </select>
                  </div>
               ) : (
                 <p className="font-medium text-gray-900">{user.batch} • {user.department}</p>
+              )}
+            </div>
+         </div>
+         <div className="p-4 flex items-center gap-4">
+            <div className="bg-gray-50 p-2 rounded-full text-gray-500"><Award size={20} /></div>
+            <div className="flex-1">
+              <p className="text-xs text-gray-400 uppercase font-bold">Academic Status</p>
+              {isEditing ? (
+                 <div className="flex gap-2 mt-1">
+                   <div className="flex-1">
+                      <label className="text-[10px] text-gray-400">Level</label>
+                      <select
+                        value={editForm.level}
+                        onChange={(e) => setEditForm({...editForm, level: parseInt(e.target.value)})}
+                        className="w-full px-3 py-1.5 text-sm bg-gray-50 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      >
+                          <option value={1}>Level 1</option>
+                          <option value={2}>Level 2</option>
+                          <option value={3}>Level 3</option>
+                          <option value={4}>Level 4</option>
+                      </select>
+                   </div>
+                   <div className="flex-1">
+                      <label className="text-[10px] text-gray-400">Term</label>
+                      <select
+                        value={editForm.term}
+                        onChange={(e) => setEditForm({...editForm, term: parseInt(e.target.value)})}
+                        className="w-full px-3 py-1.5 text-sm bg-gray-50 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      >
+                          <option value={1}>Term 1</option>
+                          <option value={2}>Term 2</option>
+                      </select>
+                   </div>
+                 </div>
+              ) : (
+                <p className="font-medium text-gray-900">Level {user.level}, Term {user.term}</p>
               )}
             </div>
          </div>
@@ -206,18 +259,10 @@ const Profile: React.FC<ProfileProps> = ({ navigate }) => {
                     onChange={(e) => setEditForm({...editForm, phoneNumber: e.target.value})}
                     placeholder="017..."
                     className="w-full mt-1 px-3 py-1.5 text-sm bg-gray-50 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                    autoFocus
                  />
               ) : (
                  <p className="font-medium text-gray-900">{user.phoneNumber || <span className="text-gray-400 italic">Not set</span>}</p>
               )}
-            </div>
-         </div>
-         <div className="p-4 flex items-center gap-4">
-            <div className="bg-gray-50 p-2 rounded-full text-gray-500"><Award size={20} /></div>
-            <div>
-              <p className="text-xs text-gray-400 uppercase font-bold">Current Standing</p>
-              <p className="font-medium text-gray-900">Level {user.level}, Term {user.term}</p>
             </div>
          </div>
       </Card>

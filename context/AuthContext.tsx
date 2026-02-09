@@ -5,8 +5,9 @@ import { api } from '../services/api';
 interface AuthContextType {
   user: User | null;
   login: (roll: string, pass: string) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   register: (roll: string, pass: string, batch: string) => Promise<void>;
-  updateProfile: (updates: { phoneNumber?: string; profileImageUrl?: string; batch?: string }) => Promise<void>;
+  updateProfile: (updates: Partial<User>) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
   error: string | null;
@@ -46,6 +47,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginWithGoogle = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const loggedInUser = await api.loginWithGoogle();
+      setUser(loggedInUser);
+      localStorage.setItem('btec_session_user', JSON.stringify(loggedInUser));
+    } catch (err: any) {
+      setError(err.message || 'Google Login failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const register = async (roll: string, pass: string, batch: string) => {
     setIsLoading(true);
     setError(null);
@@ -60,7 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const updateProfile = async (updates: { phoneNumber?: string; profileImageUrl?: string; batch?: string }) => {
+  const updateProfile = async (updates: Partial<User>) => {
     if (!user) return;
     setIsLoading(true);
     setError(null);
@@ -81,7 +96,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, updateProfile, logout, isLoading, error, setError }}>
+    <AuthContext.Provider value={{ user, login, loginWithGoogle, register, updateProfile, logout, isLoading, error, setError }}>
       {children}
     </AuthContext.Provider>
   );

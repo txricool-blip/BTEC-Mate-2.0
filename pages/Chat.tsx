@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import { ChatMessage, NavTab, User } from '../types';
-import { Send, Phone, ArrowLeft, RefreshCw } from 'lucide-react';
+import { Send, Phone, ArrowLeft, RefreshCw, Lock } from 'lucide-react';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
 
 interface ChatProps {
   navigate: (tab: NavTab) => void;
@@ -19,8 +21,13 @@ const Chat: React.FC<ChatProps> = ({ navigate }) => {
 
   if (!user) return null;
 
+  // Gatekeeper: Check if profile is complete
+  const isProfileIncomplete = user.rollNumber.startsWith('G-');
+
   // Initial Fetch
   useEffect(() => {
+    if (isProfileIncomplete) return;
+
     const fetchData = async () => {
       setIsLoading(true);
       try {
@@ -45,7 +52,7 @@ const Chat: React.FC<ChatProps> = ({ navigate }) => {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [user.batch]);
+  }, [user.batch, isProfileIncomplete]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -79,6 +86,25 @@ const Chat: React.FC<ChatProps> = ({ navigate }) => {
       handleSend();
     }
   };
+
+  if (isProfileIncomplete) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center p-6 space-y-6">
+        <div className="bg-red-100 p-6 rounded-full text-red-500 shadow-xl shadow-red-100">
+          <Lock size={48} />
+        </div>
+        <div className="text-center space-y-2">
+          <h2 className="text-2xl font-bold text-gray-900">Access Restricted</h2>
+          <p className="text-gray-500 max-w-xs mx-auto">
+            To join your batch chat, you must verify your identity by adding your Roll Number, Level, and Term to your profile.
+          </p>
+        </div>
+        <Button onClick={() => navigate(NavTab.PROFILE)} className="w-full max-w-xs">
+          Complete Profile
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full relative">
